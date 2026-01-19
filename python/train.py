@@ -158,10 +158,16 @@ def train(args):
         output_dir = Path(args.resume)
         if not output_dir.exists():
             raise ValueError(f"Resume directory not found: {output_dir}")
+
+        # Check for model (either RL checkpoint or BC pretrained)
         model_path = output_dir / "final_model.zip"
-        vec_norm_path = output_dir / "vec_normalize.pkl"
         if not model_path.exists():
-            raise ValueError(f"Model not found: {model_path}")
+            model_path = output_dir / "bc_ppo_model.zip"  # BC pretrained model
+        if not model_path.exists():
+            raise ValueError(f"No model found in {output_dir} (looked for final_model.zip and bc_ppo_model.zip)")
+
+        vec_norm_path = output_dir / "vec_normalize.pkl"
+        print(f"Resuming from: {model_path}")
     else:
         # Create new output directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -291,7 +297,7 @@ def train(args):
     return str(final_model_path)
 
 
-def play(model_path: str, vec_norm_path: str = None, episodes: int = 5):
+def play(model_path: str, vec_norm_path: str = None, episodes: int = 5, max_steps: int = 500):
     """Play using a trained model (for testing)."""
 
     print(f"\nLoading model from: {model_path}")
@@ -309,7 +315,7 @@ def play(model_path: str, vec_norm_path: str = None, episodes: int = 5):
     # Load model
     model = PPO.load(model_path, env=env)
 
-    print(f"\nPlaying {episodes} episodes...")
+    print(f"\nPlaying {episodes} episodes (max {max_steps} steps each)...")
 
     for ep in range(episodes):
         obs = env.reset()
@@ -317,13 +323,14 @@ def play(model_path: str, vec_norm_path: str = None, episodes: int = 5):
         total_reward = 0
         steps = 0
 
-        while not done:
-            action, _ = model.predict(obs, deterministic=True)
+        while not done and steps < max_steps:
+            action, _ = model.predict(obs, deterministic=True)  # Stochastic for variety
             obs, reward, done, info = env.step(action)
             total_reward += reward[0]
             steps += 1
 
-        print(f"Episode {ep + 1}: {steps} steps, reward: {total_reward:.2f}")
+        reason = "goal/done" if done else "max steps"
+        print(f"Episode {ep + 1}: {steps} steps, reward: {total_reward:.2f} ({reason})")
 
     env.close()
 
@@ -343,6 +350,8 @@ def main():
                         help="Path to VecNormalize stats for play mode")
     parser.add_argument("--episodes", type=int, default=5,
                         help="Number of episodes to play")
+    parser.add_argument("--max-steps", type=int, default=500,
+                        help="Max steps per episode in play mode (default 500 = ~10 sec)")
 
     # For resuming training
     parser.add_argument("--resume", type=str, default=None,
@@ -417,7 +426,7 @@ def main():
         if args.model is None:
             print("Error: --model required for play mode")
             return
-        play(args.model, args.vec_norm, args.episodes)
+        play(args.model, args.vec_norm, args.episodes, args.max_steps)
 
 
 if __name__ == "__main__":

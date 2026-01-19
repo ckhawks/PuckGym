@@ -27,11 +27,12 @@ class SharedMemoryConfig:
     FORMAT = "<" + "".join([
         "4B",   # obs_ready, action_ready, done, reset_flag
         "f",    # reward
-        # Observation floats (21 total)
-        "5f",   # skater_x, skater_y, skater_vel_x, skater_vel_y, skater_rotation
-        "6f",   # puck_x, puck_y, puck_height, puck_vel_x, puck_vel_y, puck_vel_height
-        "3f",   # stick_x, stick_y, stick_height
-        "4f",   # our_goal_x, our_goal_y, their_goal_x, their_goal_y
+        # Observation floats (16 total - matches PuckCapture v3)
+        "7f",   # skater: x, z, y(height), vel_x, vel_z, vel_y, rotation
+        "6f",   # puck: x, z, y(height), vel_x, vel_z, vel_y
+        "3f",   # stick: x, z, y(height)
+        # Extra state (not part of 16-obs)
+        "4f",   # our_goal_x, our_goal_z, their_goal_x, their_goal_z
         "3f",   # game_time, our_score, their_score
         # Action floats and bytes
         "5f",   # move_x, move_y, aim_x, aim_y, blade_angle
@@ -49,47 +50,49 @@ class SharedMemoryConfig:
     RESET_FLAG = 3
     REWARD = 4
 
-    # Observation indices (5-25, 21 floats total, but agent only uses first 14)
-    # Skater: x, y, vel_x, vel_y, rotation (5)       indices 5-9
-    # Puck: x, y, height, vel_x, vel_y, vel_height (6)  indices 10-15
-    # Stick: x, y, height (3)                        indices 16-18
-    # Goals: our_x, our_y, their_x, their_y (4)      indices 19-22 (not used)
-    # Game: time, our_score, their_score (3)         indices 23-25 (not used)
+    # Observation indices (16 floats, indices 5-20)
+    # Skater: x, z, y, vel_x, vel_z, vel_y, rotation (7)    indices 5-11
+    # Puck: x, z, y, vel_x, vel_z, vel_y (6)                indices 12-17
+    # Stick: x, z, y (3)                                     indices 18-20
+    # Goals: our_x, our_z, their_x, their_z (4)             indices 21-24 (not used in obs)
+    # Game: time, our_score, their_score (3)                 indices 25-27 (not used in obs)
     OBS_START = 5
-    OBS_COUNT = 14  # 14 observation values (skater + puck + stick)
-    OBS_END = OBS_START + OBS_COUNT  # = 19
+    OBS_COUNT = 16  # 16 observation values (matches PuckCapture v3)
+    OBS_END = OBS_START + OBS_COUNT  # = 21
 
-    # Action indices (after 4 bytes + 1 reward + 21 obs = 26 elements)
-    MOVE_X = 26
-    MOVE_Y = 27
-    AIM_X = 28
-    AIM_Y = 29
-    BLADE_ANGLE = 30
-    JUMP = 31
-    CROUCH = 32
-    BOOST = 33
-    TIME_SCALE = 34
+    # Action indices (after 4 bytes + 1 reward + 16 obs + 7 extra = 28 elements)
+    MOVE_X = 28
+    MOVE_Y = 29
+    AIM_X = 30
+    AIM_Y = 31
+    BLADE_ANGLE = 32
+    JUMP = 33
+    CROUCH = 34
+    BOOST = 35
+    TIME_SCALE = 36
 
 
 class PuckEnv(gym.Env):
     """
     Gymnasium environment for Puck RL training.
 
-    Observation space: 14 floats
+    Observation space: 16 floats (matches PuckCapture v3 format)
         [0] skater_x
-        [1] skater_y (actually Z in Unity - forward axis)
-        [2] skater_vel_x
-        [3] skater_vel_y
-        [4] skater_rotation
-        [5] puck_x
-        [6] puck_y (Z in Unity)
-        [7] puck_height (Y in Unity - vertical)
-        [8] puck_vel_x
-        [9] puck_vel_y
-        [10] puck_vel_height
-        [11] stick_x
-        [12] stick_y (Z in Unity)
-        [13] stick_height (Y in Unity)
+        [1] skater_z (forward axis in Unity)
+        [2] skater_y (height in Unity)
+        [3] skater_vel_x
+        [4] skater_vel_z (forward velocity)
+        [5] skater_vel_y (vertical velocity)
+        [6] skater_rotation
+        [7] puck_x
+        [8] puck_z (forward axis)
+        [9] puck_y (height)
+        [10] puck_vel_x
+        [11] puck_vel_z (forward velocity)
+        [12] puck_vel_y (vertical velocity)
+        [13] stick_x
+        [14] stick_z (forward axis)
+        [15] stick_y (height)
 
     Action space: Box(8,)
         [0] move_x: -1 to 1 (turn left/right)
@@ -249,33 +252,44 @@ class PuckEnv(gym.Env):
     def _normalize_observation(self, obs: np.ndarray) -> np.ndarray:
         """
         Normalize observations to roughly [-1, 1] range.
-        Game field is roughly 50x30 units (rink size).
+        Game field is ±50 units (world limit from SynchronizedObjectManager).
+
+        16-obs layout:
+        0: skater_x, 1: skater_z, 2: skater_y (height)
+        3: skater_vel_x, 4: skater_vel_z, 5: skater_vel_y
+        6: skater_rotation
+        7: puck_x, 8: puck_z, 9: puck_y (height)
+        10: puck_vel_x, 11: puck_vel_z, 12: puck_vel_y
+        13: stick_x, 14: stick_z, 15: stick_y (height)
         """
         normalized = obs.copy()
 
-        # Horizontal positions: rink is roughly -25 to 25 on X, -30 to 30 on Z
-        # Indices 0,1 (skater), 5,6 (puck x,y), 11,12 (stick x,y)
-        horiz_position_indices = [0, 1, 5, 6, 11, 12]
+        # Positions: world limit is ±50 units
+        # Indices 0,1 (skater x,z), 7,8 (puck x,z), 13,14 (stick x,z)
+        horiz_position_indices = [0, 1, 7, 8, 13, 14]
         for i in horiz_position_indices:
-            normalized[i] = obs[i] / 30.0
+            normalized[i] = obs[i] / 50.0
 
-        # Heights: puck and stick height (Y in Unity), typically 0-3 units
-        # Indices 7 (puck height), 13 (stick height)
-        height_indices = [7, 13]
+        # Heights: typically 0-5 units
+        # Indices 2 (skater y), 9 (puck y), 15 (stick y)
+        height_indices = [2, 9, 15]
         for i in height_indices:
-            normalized[i] = obs[i] / 2.0  # Normalize heights to ~[0, 1.5]
+            normalized[i] = obs[i] / 5.0
 
         # Horizontal velocities: assume max ~20 units/sec
-        # Indices 2,3 (skater vel), 8,9 (puck vel x,y)
-        horiz_vel_indices = [2, 3, 8, 9]
+        # Indices 3,4 (skater vel x,z), 10,11 (puck vel x,z)
+        horiz_vel_indices = [3, 4, 10, 11]
         for i in horiz_vel_indices:
             normalized[i] = obs[i] / 20.0
 
-        # Vertical velocity: puck vel height (index 10)
-        normalized[10] = obs[10] / 10.0  # Vertical velocities typically smaller
+        # Vertical velocities: typically smaller
+        # Indices 5 (skater vel y), 12 (puck vel y)
+        vert_vel_indices = [5, 12]
+        for i in vert_vel_indices:
+            normalized[i] = obs[i] / 10.0
 
-        # Rotation (index 4): already in radians, normalize to [-1, 1]
-        normalized[4] = obs[4] / np.pi
+        # Rotation (index 6): already in radians, normalize to [-1, 1]
+        normalized[6] = obs[6] / np.pi
 
         return normalized
 
