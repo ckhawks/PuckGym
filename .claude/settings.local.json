@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /s /b)",
+      "Bash(findstr:*)",
+      "Bash(pip install:*)",
+      "Bash(python:*)",
+      "Bash(dotnet build:*)"
+    ]
+  }
+}
