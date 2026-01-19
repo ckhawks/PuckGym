@@ -16,6 +16,10 @@ python/runs/
 python/logs/
 *.zip
 
+# Recordings (can be large, distribute separately)
+recordings/
+**/recordings/
+
 # C# / .NET
 bin/
 obj/
