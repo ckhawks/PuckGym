@@ -50,15 +50,18 @@ class SharedMemoryConfig:
     RESET_FLAG = 3
     REWARD = 4
 
-    # Observation indices (16 floats, indices 5-20)
+    # Observation indices (16 base floats, indices 5-20)
     # Skater: x, z, y, vel_x, vel_z, vel_y, rotation (7)    indices 5-11
     # Puck: x, z, y, vel_x, vel_z, vel_y (6)                indices 12-17
     # Stick: x, z, y (3)                                     indices 18-20
     # Goals: our_x, our_z, their_x, their_z (4)             indices 21-24 (not used in obs)
     # Game: time, our_score, their_score (3)                 indices 25-27 (not used in obs)
     OBS_START = 5
-    OBS_COUNT = 16  # 16 observation values (matches PuckCapture v3)
-    OBS_END = OBS_START + OBS_COUNT  # = 21
+    OBS_BASE_COUNT = 16  # 16 base observation values from shared memory
+    OBS_END = OBS_START + OBS_BASE_COUNT  # = 21
+
+    # After computing relative features, total is 25
+    OBS_COUNT = 25  # 16 base + 9 computed relative features
 
     # Action indices (after 4 bytes + 1 reward + 16 obs + 7 extra = 28 elements)
     MOVE_X = 28
@@ -76,7 +79,9 @@ class PuckEnv(gym.Env):
     """
     Gymnasium environment for Puck RL training.
 
-    Observation space: 16 floats (matches PuckCapture v3 format)
+    Observation space: 25 floats (16 base + 9 computed relative features)
+
+    Base observations (from shared memory):
         [0] skater_x
         [1] skater_z (forward axis in Unity)
         [2] skater_y (height in Unity)
@@ -93,6 +98,17 @@ class PuckEnv(gym.Env):
         [13] stick_x
         [14] stick_z (forward axis)
         [15] stick_y (height)
+
+    Computed relative features:
+        [16] puck_rel_x (puck relative to player)
+        [17] puck_rel_z
+        [18] goal_rel_x (enemy goal relative to player)
+        [19] goal_rel_z
+        [20] angle_to_puck (relative to player facing)
+        [21] distance_to_puck
+        [22] stick_to_puck_x (for fine control)
+        [23] stick_to_puck_z
+        [24] stick_to_puck_y
 
     Action space: Box(8,)
         [0] move_x: -1 to 1 (turn left/right)
@@ -229,25 +245,103 @@ class PuckEnv(gym.Env):
         self._write_state(state)
 
     def _extract_obs(self, state: Tuple) -> np.ndarray:
-        """Extract observation array from state tuple."""
-        obs = np.array(
+        """Extract observation array from state tuple and compute relative features."""
+        # Extract base 16 observations
+        base_obs = np.array(
             state[self.cfg.OBS_START:self.cfg.OBS_END],
             dtype=np.float32
         )
 
         # Check for NaN/Inf values (physics explosion in Unity)
-        if np.any(~np.isfinite(obs)):
+        if np.any(~np.isfinite(base_obs)):
             print(f"[PuckEnv] WARNING: NaN/Inf detected in observation! Replacing with zeros.")
-            obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
+            base_obs = np.nan_to_num(base_obs, nan=0.0, posinf=0.0, neginf=0.0)
             self._nan_detected = True
 
         if self.normalize_obs:
-            obs = self._normalize_observation(obs)
+            base_obs = self._normalize_observation(base_obs)
 
-        # Clip to reasonable range after normalization
-        obs = np.clip(obs, -10.0, 10.0)
+        # Clip base obs to reasonable range after normalization
+        base_obs = np.clip(base_obs, -10.0, 10.0)
+
+        # Compute relative features (9 additional features)
+        relative_obs = self._compute_relative_features(base_obs)
+
+        # Concatenate base + relative = 25 total
+        obs = np.concatenate([base_obs, relative_obs])
 
         return obs
+
+    def _compute_relative_features(self, obs: np.ndarray) -> np.ndarray:
+        """
+        Compute relative/derived features from normalized base observations.
+
+        Input obs layout (16 floats, normalized):
+            0: skater_x, 1: skater_z, 2: skater_y
+            3: skater_vel_x, 4: skater_vel_z, 5: skater_vel_y
+            6: skater_rotation (normalized by /π)
+            7: puck_x, 8: puck_z, 9: puck_y
+            10: puck_vel_x, 11: puck_vel_z, 12: puck_vel_y
+            13: stick_x, 14: stick_z, 15: stick_y
+
+        Output: 9 new features
+            0: puck_rel_x (puck x relative to player)
+            1: puck_rel_z (puck z relative to player)
+            2: goal_rel_x (enemy goal x relative to player)
+            3: goal_rel_z (enemy goal z relative to player)
+            4: angle_to_puck (angle to puck relative to player facing, normalized)
+            5: distance_to_puck (normalized)
+            6: stick_to_puck_x (stick to puck delta x)
+            7: stick_to_puck_z (stick to puck delta z)
+            8: stick_to_puck_y (stick to puck delta y)
+        """
+        relative = np.zeros(9, dtype=np.float32)
+
+        # Normalization constants
+        POS_NORM = 50.0
+        GOAL_Z = 26.0  # Enemy goal Z position in world units
+
+        # Extract positions (already normalized)
+        player_x = obs[0]
+        player_z = obs[1]
+        player_rot = obs[6] * np.pi  # Denormalize rotation
+
+        puck_x = obs[7]
+        puck_z = obs[8]
+        puck_y = obs[9]
+
+        stick_x = obs[13]
+        stick_z = obs[14]
+        stick_y = obs[15]
+
+        # Puck relative to player (already normalized since both are /50)
+        puck_rel_x = puck_x - player_x
+        puck_rel_z = puck_z - player_z
+        relative[0] = puck_rel_x
+        relative[1] = puck_rel_z
+
+        # Goal relative to player (goal is at z=26 in world, normalized = 26/50 = 0.52)
+        goal_x_norm = 0.0  # Goal is at x=0
+        goal_z_norm = GOAL_Z / POS_NORM
+        relative[2] = goal_x_norm - player_x
+        relative[3] = goal_z_norm - player_z
+
+        # Angle to puck relative to player facing
+        angle_to_puck_world = np.arctan2(puck_rel_x * POS_NORM, puck_rel_z * POS_NORM)
+        angle_to_puck_rel = angle_to_puck_world - player_rot
+        # Normalize to [-1, 1] by dividing by π
+        relative[4] = np.clip(angle_to_puck_rel / np.pi, -1, 1)
+
+        # Distance to puck (in normalized space)
+        distance = np.sqrt(puck_rel_x**2 + puck_rel_z**2)
+        relative[5] = distance
+
+        # Stick to puck delta (for fine control)
+        relative[6] = puck_x - stick_x
+        relative[7] = puck_z - stick_z
+        relative[8] = puck_y - stick_y  # Y matters for hitting airborne puck
+
+        return relative
 
     def _normalize_observation(self, obs: np.ndarray) -> np.ndarray:
         """

@@ -260,6 +260,91 @@ def downsample(obs: np.ndarray, actions: np.ndarray, rewards: np.ndarray, factor
     return obs[::factor], actions[::factor], rewards[::factor]
 
 
+def compute_relative_features(obs: np.ndarray, goal_z: float = 26.0) -> np.ndarray:
+    """
+    Compute relative/derived features from absolute observations.
+
+    Input obs layout (16 floats, already normalized):
+        0: skater_x, 1: skater_z, 2: skater_y
+        3: skater_vel_x, 4: skater_vel_z, 5: skater_vel_y
+        6: skater_rotation (normalized by /π)
+        7: puck_x, 8: puck_z, 9: puck_y
+        10: puck_vel_x, 11: puck_vel_z, 12: puck_vel_y
+        13: stick_x, 14: stick_z, 15: stick_y
+
+    Output: original 16 + 9 new = 25 features
+
+    New features (indices 16-24):
+        16: puck_rel_x (puck x relative to player)
+        17: puck_rel_z (puck z relative to player)
+        18: goal_rel_x (enemy goal x relative to player)
+        19: goal_rel_z (enemy goal z relative to player)
+        20: angle_to_puck (angle to puck relative to player facing, normalized)
+        21: distance_to_puck (normalized)
+        22: stick_to_puck_x (stick to puck delta x)
+        23: stick_to_puck_z (stick to puck delta z)
+        24: stick_to_puck_y (stick to puck delta y - for fine control)
+
+    Args:
+        obs: (N, 16) normalized observations
+        goal_z: Z position of enemy goal in world units (default 26 for red goal)
+
+    Returns:
+        (N, 25) augmented observations
+    """
+    N = obs.shape[0]
+    new_features = np.zeros((N, 9), dtype=np.float32)
+
+    # Denormalization constants (to compute in world space, then renormalize)
+    POS_NORM = 50.0
+    HEIGHT_NORM = 5.0
+
+    # Extract positions (still normalized)
+    player_x = obs[:, 0]
+    player_z = obs[:, 1]
+    player_rot = obs[:, 6] * np.pi  # Denormalize rotation
+
+    puck_x = obs[:, 7]
+    puck_z = obs[:, 8]
+    puck_y = obs[:, 9]
+
+    stick_x = obs[:, 13]
+    stick_z = obs[:, 14]
+    stick_y = obs[:, 15]
+
+    # Puck relative to player (already normalized since both are /50)
+    puck_rel_x = puck_x - player_x
+    puck_rel_z = puck_z - player_z
+    new_features[:, 0] = puck_rel_x
+    new_features[:, 1] = puck_rel_z
+
+    # Goal relative to player (goal is at z=26 in world, normalized = 26/50 = 0.52)
+    goal_x_norm = 0.0  # Goal is at x=0
+    goal_z_norm = goal_z / POS_NORM
+    new_features[:, 2] = goal_x_norm - player_x
+    new_features[:, 3] = goal_z_norm - player_z
+
+    # Angle to puck relative to player facing
+    # atan2 gives angle in world frame, subtract player rotation
+    angle_to_puck_world = np.arctan2(puck_rel_x * POS_NORM, puck_rel_z * POS_NORM)
+    angle_to_puck_rel = angle_to_puck_world - player_rot
+    # Normalize to [-1, 1] by dividing by π
+    new_features[:, 4] = np.clip(angle_to_puck_rel / np.pi, -1, 1)
+
+    # Distance to puck (in normalized space, then scale reasonably)
+    # Max distance on rink is ~60 units, normalized ~1.2, so this stays in reasonable range
+    distance = np.sqrt(puck_rel_x**2 + puck_rel_z**2)
+    new_features[:, 5] = distance
+
+    # Stick to puck delta (for fine control)
+    new_features[:, 6] = puck_x - stick_x
+    new_features[:, 7] = puck_z - stick_z
+    new_features[:, 8] = puck_y - stick_y  # Y matters for hitting airborne puck
+
+    # Concatenate original + new features
+    return np.concatenate([obs, new_features], axis=1)
+
+
 # =============================================================================
 # CLI
 # =============================================================================

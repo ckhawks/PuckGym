@@ -34,11 +34,16 @@ public class Plugin : IPuckMod
                 CaptureConfig.Load();
                 CaptureKeybinds.Initialize();
                 RecordingController.Create();
+                PlaybackController.Create();
 
                 Plugin.Log("Recording components initialized.");
                 Plugin.Log("  F7 / Numpad0 / Insert = Toggle recording");
                 Plugin.Log("  F8 = Reset episode (discard current)");
                 Plugin.Log($"  Recordings folder: {CaptureConfig.RecordingsFolder}");
+                Plugin.Log("Playback commands:");
+                Plugin.Log("  /playback [filename] = Start playback");
+                Plugin.Log("  /stopplayback = Stop playback");
+                Plugin.Log("  /nextplayback = Skip to next recording");
             }
 
             Plugin.Log($"Enabled!");
@@ -60,6 +65,8 @@ public class Plugin : IPuckMod
 
             // Cleanup recording components
             CaptureKeybinds.Cleanup();
+            if (PlaybackController.Instance != null)
+                UnityEngine.Object.Destroy(PlaybackController.Instance.gameObject);
             if (RecordingController.Instance != null)
                 UnityEngine.Object.Destroy(RecordingController.Instance.gameObject);
 

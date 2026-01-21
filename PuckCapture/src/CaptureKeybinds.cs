@@ -68,6 +68,14 @@ public static class CaptureKeybinds
         [HarmonyPostfix]
         public static void Postfix(PlayerInput __instance)
         {
+            // Apply playback inputs AFTER game reads hardware input
+            // This ensures our values override the hardware values
+            if (PlaybackController.Instance != null && PlaybackController.Instance.IsPlaying)
+            {
+                PlaybackController.Instance.ApplyCurrentActions();
+                return; // Don't process keybinds during playback
+            }
+
             // Don't process keybinds if chat is focused
             if (IsChatFocused()) return;
 

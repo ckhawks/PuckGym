@@ -67,7 +67,7 @@ class RewardLoggingCallback(BaseCallback):
                 print(f"\n[Step {self.num_timesteps}] "
                       f"Episodes: {len(self.model.ep_info_buffer)}, "
                       f"Avg Reward: {avg_reward:.2f}, "
-                      f"Avg Length: {avg_length:.0f}")
+                      f"Avg Length: {avg_length:.0f}", flush=True)
 
         return True
 
@@ -102,7 +102,7 @@ class TimeScaleCallback(BaseCallback):
         self._set_time_scale(self.fast_scale)
         print(f"[TimeScale] Starting at {self.fast_scale}x, "
               f"will slow to {self.slow_scale}x for {self.slow_duration}s "
-              f"every {self.cycle_seconds/60:.0f} minutes")
+              f"every {self.cycle_seconds/60:.0f} minutes", flush=True)
 
     def _on_step(self) -> bool:
         import time
@@ -115,11 +115,11 @@ class TimeScaleCallback(BaseCallback):
         if should_be_slow and not self._is_slow:
             self._set_time_scale(self.slow_scale)
             self._is_slow = True
-            print(f"\n[TimeScale] Slowing to {self.slow_scale}x for viewers...")
+            print(f"\n[TimeScale] Slowing to {self.slow_scale}x for viewers...", flush=True)
         elif not should_be_slow and self._is_slow:
             self._set_time_scale(self.fast_scale)
             self._is_slow = False
-            print(f"\n[TimeScale] Speeding up to {self.fast_scale}x...")
+            print(f"\n[TimeScale] Speeding up to {self.fast_scale}x...", flush=True)
 
         return True
 
@@ -275,10 +275,10 @@ def train(args):
         model.learn(
             total_timesteps=args.total_timesteps,
             callback=callbacks,
-            progress_bar=True,
+            progress_bar=False,
         )
     except KeyboardInterrupt:
-        print("\n\nTraining interrupted by user!")
+        print("\n\nTraining interrupted by user!", flush=True)
 
     # Save final model
     final_model_path = output_dir / "final_model"
@@ -297,7 +297,7 @@ def train(args):
     return str(final_model_path)
 
 
-def play(model_path: str, vec_norm_path: str = None, episodes: int = 5, max_steps: int = 500):
+def play(model_path: str, vec_norm_path: str = None, episodes: int = 5, max_steps: int = 500, deterministic: bool = False):
     """Play using a trained model (for testing)."""
 
     print(f"\nLoading model from: {model_path}")
@@ -315,7 +315,8 @@ def play(model_path: str, vec_norm_path: str = None, episodes: int = 5, max_step
     # Load model
     model = PPO.load(model_path, env=env)
 
-    print(f"\nPlaying {episodes} episodes (max {max_steps} steps each)...")
+    mode_str = "deterministic" if deterministic else "stochastic"
+    print(f"\nPlaying {episodes} episodes (max {max_steps} steps each, {mode_str})...")
 
     for ep in range(episodes):
         obs = env.reset()
@@ -324,7 +325,7 @@ def play(model_path: str, vec_norm_path: str = None, episodes: int = 5, max_step
         steps = 0
 
         while not done and steps < max_steps:
-            action, _ = model.predict(obs, deterministic=True)  # Stochastic for variety
+            action, _ = model.predict(obs, deterministic=deterministic)
             obs, reward, done, info = env.step(action)
             total_reward += reward[0]
             steps += 1
@@ -352,6 +353,8 @@ def main():
                         help="Number of episodes to play")
     parser.add_argument("--max-steps", type=int, default=500,
                         help="Max steps per episode in play mode (default 500 = ~10 sec)")
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Use deterministic actions in play mode (default: stochastic)")
 
     # For resuming training
     parser.add_argument("--resume", type=str, default=None,
@@ -426,7 +429,7 @@ def main():
         if args.model is None:
             print("Error: --model required for play mode")
             return
-        play(args.model, args.vec_norm, args.episodes, args.max_steps)
+        play(args.model, args.vec_norm, args.episodes, args.max_steps, args.deterministic)
 
 
 if __name__ == "__main__":

@@ -27,18 +27,31 @@ from gymnasium import spaces
 from imitation.algorithms import bc
 from imitation.data import types
 
-from load_recordings import load_all_recordings, print_summary
+from load_recordings import load_all_recordings, print_summary, compute_relative_features
 
 
-# Observation layout in v3 format (16 floats)
-# 0: skater_x, 1: skater_z, 2: skater_y (height)
-# 3: skater_vel_x, 4: skater_vel_z, 5: skater_vel_y
-# 6: skater_rotation
-# 7: puck_x, 8: puck_z, 9: puck_y (height)
-# 10: puck_vel_x, 11: puck_vel_z, 12: puck_vel_y
-# 13: stick_x, 14: stick_z, 15: stick_y (height)
+# Observation layout (25 floats = 16 base + 9 computed)
+#
+# Base observations (from recordings):
+#   0: skater_x, 1: skater_z, 2: skater_y (height)
+#   3: skater_vel_x, 4: skater_vel_z, 5: skater_vel_y
+#   6: skater_rotation
+#   7: puck_x, 8: puck_z, 9: puck_y (height)
+#   10: puck_vel_x, 11: puck_vel_z, 12: puck_vel_y
+#   13: stick_x, 14: stick_z, 15: stick_y (height)
+#
+# Computed relative features:
+#   16: puck_rel_x (puck relative to player)
+#   17: puck_rel_z
+#   18: goal_rel_x (enemy goal relative to player)
+#   19: goal_rel_z
+#   20: angle_to_puck (relative to player facing)
+#   21: distance_to_puck
+#   22: stick_to_puck_x (for fine control)
+#   23: stick_to_puck_z
+#   24: stick_to_puck_y
 
-OBS_DIM = 16
+OBS_DIM = 25
 ACT_DIM = 8
 
 
@@ -152,9 +165,14 @@ def train_bc(
 
     print_summary(metadata)
 
-    print(f"\nData shapes:")
+    print(f"\nData shapes (raw):")
     print(f"  Observations: {obs.shape}")
     print(f"  Actions: {actions.shape}")
+
+    # Compute relative features
+    print(f"\nComputing relative features...")
+    obs = compute_relative_features(obs)
+    print(f"  Augmented observations: {obs.shape}")
 
     # Get episode lengths for creating done flags
     episode_lengths = [m.step_count for m in metadata]
@@ -290,6 +308,9 @@ def evaluate_bc(model_path: str, recordings_folder: str):
     if len(obs) == 0:
         print("No recordings to evaluate on!")
         return
+
+    # Compute relative features (same as training)
+    obs = compute_relative_features(obs)
 
     # Load model
     venv = create_dummy_env()
