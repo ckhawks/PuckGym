@@ -79,7 +79,7 @@ public class RLBridge : IDisposable
     // =============================================================
     // CONFIGURATION
     // =============================================================
-    private const string SHARED_MEMORY_NAME = "PuckRL";
+    private const string SHARED_MEMORY_NAME_BASE = "PuckRL";
     private const int SHARED_MEMORY_SIZE = 4096;
     private const int SPINLOCK_YIELD_INTERVAL = 100;
     private const int TIMEOUT_SPINS = 10_000_000;
@@ -87,6 +87,8 @@ public class RLBridge : IDisposable
     // =============================================================
     // STATE
     // =============================================================
+    private int _instanceId;
+    private string _memoryName;
     private MemoryMappedFile _mmf;
     private MemoryMappedViewAccessor _accessor;
     private SharedState _state;
@@ -114,13 +116,16 @@ public class RLBridge : IDisposable
     // =============================================================
     // INITIALIZATION
     // =============================================================
-    public bool Initialize()
+    public bool Initialize(int instanceId = 0)
     {
         if (_initialized) return true;
 
         try
         {
-            _mmf = MemoryMappedFile.CreateOrOpen(SHARED_MEMORY_NAME, SHARED_MEMORY_SIZE);
+            _instanceId = instanceId;
+            _memoryName = $"{SHARED_MEMORY_NAME_BASE}_{_instanceId}";
+
+            _mmf = MemoryMappedFile.CreateOrOpen(_memoryName, SHARED_MEMORY_SIZE);
             _accessor = _mmf.CreateViewAccessor();
 
             _state = new SharedState();
@@ -131,7 +136,7 @@ public class RLBridge : IDisposable
             _episodeReward = 0;
             _totalEpisodes = 0;
 
-            Plugin.Log($"RLBridge initialized. Memory: '{SHARED_MEMORY_NAME}', Size: {Marshal.SizeOf<SharedState>()} bytes");
+            Plugin.Log($"RLBridge initialized. Instance: {_instanceId}, Memory: '{_memoryName}', Size: {Marshal.SizeOf<SharedState>()} bytes");
             return true;
         }
         catch (Exception ex)
