@@ -17,7 +17,7 @@ from stable_baselines3.common.callbacks import (
     EvalCallback,
 )
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
 from puck_env import PuckEnv
 
@@ -136,10 +136,11 @@ class TimeScaleCallback(BaseCallback):
             env.set_time_scale(scale)
 
 
-def make_env(normalize_obs: bool = True, timeout: float = 5.0):
+def make_env(instance_id: int = 0, normalize_obs: bool = True, timeout: float = 5.0):
     """Create and wrap the environment."""
     def _init():
         env = PuckEnv(
+            instance_id=instance_id,
             timeout_seconds=timeout,
             normalize_obs=normalize_obs,
         )
@@ -183,11 +184,33 @@ def train(args):
     print(f"  Output directory: {output_dir}")
     print(f"{'='*60}\n")
 
-    # Create environment
-    print("Creating environment...")
+    # Create environment(s)
+    print(f"Creating {args.num_envs} environment(s) with instance offset {args.instance_offset}...")
     print("Make sure the Puck game is running with the RL mod!")
 
-    env = DummyVecEnv([make_env(normalize_obs=True, timeout=args.timeout)])
+    # Create multiple environments with instance IDs offset by instance_offset
+    # e.g., if num_envs=3 and instance_offset=1, creates instances 1, 2, 3
+    if args.num_envs == 1:
+        # Single environment - use DummyVecEnv for simpler debugging
+        env = DummyVecEnv([make_env(
+            instance_id=args.instance_offset,
+            normalize_obs=True,
+            timeout=args.timeout
+        )])
+        print(f"Using DummyVecEnv with instance {args.instance_offset}")
+    else:
+        # Multiple environments - use SubprocVecEnv for true parallelism
+        env_fns = []
+        for i in range(args.num_envs):
+            instance_id = args.instance_offset + i
+            env_fns.append(make_env(
+                instance_id=instance_id,
+                normalize_obs=True,
+                timeout=args.timeout
+            ))
+        env = SubprocVecEnv(env_fns)
+        instances = [args.instance_offset + i for i in range(args.num_envs)]
+        print(f"Using SubprocVecEnv with instances: {instances}")
 
     # Load or create VecNormalize wrapper
     if resuming and vec_norm_path.exists():
@@ -372,6 +395,10 @@ def main():
                         help="Save model every N steps")
 
     # Environment settings
+    parser.add_argument("--num-envs", type=int, default=1,
+                        help="Number of parallel environments (game instances)")
+    parser.add_argument("--instance-offset", type=int, default=1,
+                        help="Starting instance ID (default 1, reserves 0 for viewer)")
     parser.add_argument("--timeout", type=float, default=5.0,
                         help="Timeout in seconds waiting for game")
     parser.add_argument("--vec-normalize", action="store_true",

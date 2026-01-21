@@ -17,8 +17,13 @@ from typing import Optional, Tuple, Dict, Any
 class SharedMemoryConfig:
     """Configuration for shared memory communication. Must match C# exactly."""
 
-    MEMORY_NAME = "PuckRL"
+    MEMORY_NAME_BASE = "PuckRL"
     MEMORY_SIZE = 4096
+
+    def __init__(self, instance_id: int = 0):
+        """Initialize config with instance-specific memory name."""
+        self.MEMORY_NAME = f"{self.MEMORY_NAME_BASE}_{instance_id}"
+        self.instance_id = instance_id
 
     # Struct format (must match C# SharedState with Pack=1)
     # < = little-endian
@@ -125,17 +130,19 @@ class PuckEnv(gym.Env):
 
     def __init__(
         self,
+        instance_id: int = 0,
         timeout_seconds: float = 5.0,
         normalize_obs: bool = True,
         render_mode: Optional[str] = None
     ):
         super().__init__()
 
+        self.instance_id = instance_id
         self.timeout_seconds = timeout_seconds
         self.normalize_obs = normalize_obs
         self.render_mode = render_mode
 
-        self.cfg = SharedMemoryConfig()
+        self.cfg = SharedMemoryConfig(instance_id=instance_id)
         self._mm: Optional[mmap.mmap] = None
         self._connected = False
 

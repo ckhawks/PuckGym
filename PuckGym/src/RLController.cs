@@ -16,6 +16,7 @@ public class RLController : MonoBehaviour
     // CONFIGURATION
     // =============================================================
     private bool _trainingEnabled = false;
+    private int _instanceId = 0;  // Instance ID for multi-instance training
 
     // Curriculum learning - enable stick control to interact with puck
     private const bool ENABLE_STICK_CONTROL = true;
@@ -50,6 +51,22 @@ public class RLController : MonoBehaviour
     private bool _goalScoredThisFrame = false;
 
     public bool IsTrainingEnabled => _trainingEnabled;
+    public int InstanceId => _instanceId;
+
+    /// <summary>
+    /// Set the instance ID for multi-instance training.
+    /// Must be called before starting training (F9).
+    /// </summary>
+    public void SetInstanceId(int id)
+    {
+        if (_trainingEnabled)
+        {
+            Plugin.Log("Cannot change instance ID while training is active");
+            return;
+        }
+        _instanceId = id;
+        Plugin.Log($"Instance ID set to: {_instanceId}");
+    }
 
     // =============================================================
     // CACHED REFERENCES
@@ -175,7 +192,7 @@ public class RLController : MonoBehaviour
         if (_trainingEnabled)
         {
             if (!RLBridge.Instance.IsInitialized)
-                RLBridge.Instance.Initialize();
+                RLBridge.Instance.Initialize(_instanceId);
 
             RefreshPlayerReferences();
             FindGoals();
@@ -185,7 +202,7 @@ public class RLController : MonoBehaviour
             SpawnPuckAtRandomPosition();
             RandomizePlayerPosition();
             ResetTrackingState();
-            Plugin.Log("Training started - randomized player and puck positions");
+            Plugin.Log($"Training started on instance {_instanceId} - randomized player and puck positions");
         }
         else
         {
