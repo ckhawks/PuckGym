@@ -118,6 +118,13 @@ public class RLBridge : IDisposable
     // =============================================================
     public bool Initialize(int instanceId = 0)
     {
+        // If already initialized with a different instance ID, reset first
+        if (_initialized && _instanceId != instanceId)
+        {
+            Plugin.Log($"RLBridge: Reinitializing from instance {_instanceId} to {instanceId}");
+            Reset();
+        }
+
         if (_initialized) return true;
 
         try
@@ -283,6 +290,19 @@ public class RLBridge : IDisposable
     private void WriteState()
     {
         _accessor.Write(0, ref _state);
+    }
+
+    /// <summary>
+    /// Reset the bridge so it can be reinitialized with a new instance ID.
+    /// </summary>
+    public void Reset()
+    {
+        _accessor?.Dispose();
+        _mmf?.Dispose();
+        _accessor = null;
+        _mmf = null;
+        _initialized = false;
+        Plugin.Log("RLBridge reset.");
     }
 
     public void Dispose()

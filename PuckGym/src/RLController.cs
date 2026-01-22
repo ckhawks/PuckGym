@@ -85,6 +85,8 @@ public class RLController : MonoBehaviour
     private int _prevTheirScore;
     private Vector3 _prevPuckPos;
     private bool _hadPuckContact;
+    private float _prevSkaterRotation = -999f;  // Invalid initial value
+    private float _cumulativeRotation = 0f;     // Track spinning
 
     // =============================================================
     // SINGLETON
@@ -191,8 +193,8 @@ public class RLController : MonoBehaviour
 
         if (_trainingEnabled)
         {
-            if (!RLBridge.Instance.IsInitialized)
-                RLBridge.Instance.Initialize(_instanceId);
+            // Always call Initialize - it handles reinitializing if instance ID changed
+            RLBridge.Instance.Initialize(_instanceId);
 
             RefreshPlayerReferences();
             FindGoals();
@@ -280,19 +282,18 @@ public class RLController : MonoBehaviour
 
         PlayerTeam ourTeam = GetPlayerTeam();
 
-        // If puck entered the other team's goal, WE scored
-        // If puck entered our team's goal, THEY scored
+        // CURRICULUM PHASE 1: Goal rewards reduced - focus on reaching puck first
         if (goalTeam != ourTeam)
         {
             // We scored!
-            _pendingGoalReward = 100.0f;
-            Plugin.Log("GOAL SCORED! +100 reward");
+            _pendingGoalReward = 10.0f;  // Reduced from 100 during Phase 1
+            Plugin.Log("GOAL SCORED! +10 reward");
         }
         else
         {
-            // They scored on us
-            _pendingGoalReward = -100.0f;
-            Plugin.Log("GOAL CONCEDED! -100 reward");
+            // They scored on us - no penalty during Phase 1
+            _pendingGoalReward = 0f;
+            Plugin.Log("Goal conceded (no penalty in Phase 1)");
         }
 
         _goalScoredThisFrame = true;
@@ -506,6 +507,8 @@ public class RLController : MonoBehaviour
         _prevOurScore = 0;
         _prevTheirScore = 0;
         _hadPuckContact = false;
+        _prevSkaterRotation = -999f;
+        _cumulativeRotation = 0f;
 
         // Reset goal tracking
         _goalScoredThisFrame = false;
@@ -915,82 +918,68 @@ public class RLController : MonoBehaviour
     // =============================================================
     // REWARD FUNCTION
     // =============================================================
+    // CURRICULUM PHASE 1: Get to puck and touch it
+    // Goal-related rewards disabled until agent can reliably reach puck
     private float CalculateReward(GameObservation obs)
     {
         float reward = 0f;
 
-        // NOTE: Goal scored/conceded rewards are now handled by OnGoalScored()
-        // which is called from the GoalTrigger Harmony patch
-
-        // === DENSE REWARDS (shaping) ===
-
-        // Distance to puck (encourage getting close)
+        // Distance to puck
         float distToPuck = Vector3.Distance(
             new Vector3(obs.SkaterPos.x, 0, obs.SkaterPos.z),
             new Vector3(obs.PuckPos.x, 0, obs.PuckPos.z)
         );
 
-        // Reward for getting closer to puck
+        // Asymmetric approach reward: reward approaching, PUNISH retreating harder
         if (_prevDistToPuck > 0)
         {
             float puckApproach = _prevDistToPuck - distToPuck;
-            reward += puckApproach * 0.02f;
-        }
-
-        // Puck distance to their goal (reward puck moving toward goal)
-        float puckToGoal = Vector3.Distance(
-            new Vector3(obs.PuckPos.x, 0, obs.PuckPos.z),
-            new Vector3(obs.TheirGoal.x, 0, obs.TheirGoal.z)
-        );
-        float goalZ = obs.TheirGoal.z;
-        float puckZ = obs.PuckPos.z;
-
-        if (_prevPuckDistToGoal > 0)
-        {
-            float goalApproach = _prevPuckDistToGoal - puckToGoal;
-            reward += goalApproach * 0.02f;
-        }
-
-        // Reward for puck being IN FRONT of goal (not behind it)
-        bool puckInFrontOfGoal;
-        if (goalZ > 0)
-        {
-            puckInFrontOfGoal = puckZ < goalZ && puckZ > 0;
-        }
-        else
-        {
-            puckInFrontOfGoal = puckZ > goalZ && puckZ < 0;
-        }
-
-        // Small bonus for puck in front of goal and close (reduced from 0.01)
-        if (puckInFrontOfGoal && puckToGoal < 15f)
-        {
-            reward += 0.002f;
-        }
-
-        // Small bonus for puck in offensive zone (reduced from 0.005)
-        bool puckInOffensiveZone = (goalZ > 0 && puckZ > 0) || (goalZ < 0 && puckZ < 0);
-        if (puckInOffensiveZone)
-        {
-            reward += 0.001f;
-        }
-
-        // Reward for puck moving fast TOWARD the goal (encourages shooting)
-        Vector3 puckVel = new Vector3(obs.PuckVel.x, 0, obs.PuckVel.z);
-        float puckSpeed = puckVel.magnitude;
-        if (puckSpeed > 1f)  // Only if puck is actually moving
-        {
-            Vector3 toGoal = new Vector3(obs.TheirGoal.x - obs.PuckPos.x, 0, obs.TheirGoal.z - obs.PuckPos.z).normalized;
-            float shotQuality = Vector3.Dot(puckVel.normalized, toGoal);  // 1 = toward goal, -1 = away
-            if (shotQuality > 0)
+            if (puckApproach > 0)
             {
-                // Reward scales with speed and direction toward goal
-                reward += shotQuality * Mathf.Min(puckSpeed / 20f, 1f) * 0.05f;
+                reward += puckApproach * 1.0f;  // +1.0 per meter closer
+            }
+            else
+            {
+                reward += puckApproach * 3.0f;  // -3.0 per meter further (3x penalty)
             }
         }
 
-        // Reward for touching puck (hitting it with stick)
-        // Keep this small to avoid farming taps instead of actually playing
+        // Reward for velocity TOWARD the puck (penalizes spinning in place)
+        Vector3 toPuck = new Vector3(obs.PuckPos.x - obs.SkaterPos.x, 0, obs.PuckPos.z - obs.SkaterPos.z).normalized;
+        Vector3 playerVel = new Vector3(obs.SkaterVel.x, 0, obs.SkaterVel.z);
+        float speedTowardPuck = Vector3.Dot(playerVel, toPuck);  // Positive = moving toward puck
+        if (speedTowardPuck >= 0)
+        {
+            reward += speedTowardPuck * 0.1f;  // Small reward for velocity toward puck
+        }
+        else
+        {
+            reward += speedTowardPuck * 0.3f;  // Bigger penalty for velocity away from puck
+        }
+
+        // Harsh penalty for spinning (track cumulative rotation)
+        if (_prevSkaterRotation > -900f)  // Valid previous rotation
+        {
+            float rotDelta = Mathf.Abs(obs.SkaterRotation - _prevSkaterRotation);
+            // Handle wrap-around (e.g., 6.2 to 0.1 radians)
+            if (rotDelta > Mathf.PI) rotDelta = 2f * Mathf.PI - rotDelta;
+
+            _cumulativeRotation += rotDelta;
+
+            // Penalize after just half a rotation (π radians) - kicks in fast
+            if (_cumulativeRotation > Mathf.PI)
+            {
+                // Scaling penalty - worse the more you spin
+                float excessRotation = _cumulativeRotation - Mathf.PI;
+                reward -= 0.5f + (excessRotation * 0.3f);  // Base + scaled penalty
+            }
+        }
+        _prevSkaterRotation = obs.SkaterRotation;
+
+        // Slower decay - spinning stays "remembered" longer
+        _cumulativeRotation *= 0.9f;
+
+        // Big reward for touching puck with stick
         if (_localPlayer != null && _localPlayer.Stick != null)
         {
             Puck puck = GetNearestPuck();
@@ -998,18 +987,18 @@ public class RLController : MonoBehaviour
             {
                 if (!_hadPuckContact)
                 {
-                    reward += 0.1f; // Small bonus for making contact
+                    reward += 5.0f;  // Big bonus for making contact
                     _hadPuckContact = true;
+                    Plugin.Log("PUCK CONTACT! +5.0 reward");
                 }
+                // Continuous reward while touching
+                reward += 0.5f;
             }
             else
             {
                 _hadPuckContact = false;
             }
         }
-
-        // Small time penalty to encourage urgency
-        reward -= 0.001f;
 
         return reward;
     }

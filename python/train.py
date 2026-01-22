@@ -136,7 +136,7 @@ class TimeScaleCallback(BaseCallback):
             env.set_time_scale(scale)
 
 
-def make_env(instance_id: int = 0, normalize_obs: bool = True, timeout: float = 5.0):
+def make_env(instance_id: int = 0, normalize_obs: bool = True, timeout: float = 5.0, time_scale: float = 0.0):
     """Create and wrap the environment."""
     def _init():
         env = PuckEnv(
@@ -144,6 +144,8 @@ def make_env(instance_id: int = 0, normalize_obs: bool = True, timeout: float = 
             timeout_seconds=timeout,
             normalize_obs=normalize_obs,
         )
+        if time_scale > 0:
+            env.set_time_scale(time_scale)
         env = Monitor(env)  # Wrap for logging
         return env
     return _init
@@ -188,6 +190,9 @@ def train(args):
     print(f"Creating {args.num_envs} environment(s) with instance offset {args.instance_offset}...")
     print("Make sure the Puck game is running with the RL mod!")
 
+    # Determine time scale: if --no-time-scale, use fast_scale constantly (no slow-down cycles)
+    env_time_scale = args.fast_scale if args.no_time_scale else 0.0
+
     # Create multiple environments with instance IDs offset by instance_offset
     # e.g., if num_envs=3 and instance_offset=1, creates instances 1, 2, 3
     if args.num_envs == 1:
@@ -195,7 +200,8 @@ def train(args):
         env = DummyVecEnv([make_env(
             instance_id=args.instance_offset,
             normalize_obs=True,
-            timeout=args.timeout
+            timeout=args.timeout,
+            time_scale=env_time_scale
         )])
         print(f"Using DummyVecEnv with instance {args.instance_offset}")
     else:
@@ -206,11 +212,15 @@ def train(args):
             env_fns.append(make_env(
                 instance_id=instance_id,
                 normalize_obs=True,
-                timeout=args.timeout
+                timeout=args.timeout,
+                time_scale=env_time_scale
             ))
         env = SubprocVecEnv(env_fns)
         instances = [args.instance_offset + i for i in range(args.num_envs)]
         print(f"Using SubprocVecEnv with instances: {instances}")
+
+    if args.no_time_scale:
+        print(f"[TimeScale] All envs set to constant {args.fast_scale}x (no slow-down cycles)")
 
     # Load or create VecNormalize wrapper
     if resuming and vec_norm_path.exists():
@@ -289,6 +299,7 @@ def train(args):
             cycle_minutes=args.slow_cycle,
             slow_duration=args.slow_duration,
         ))
+    # Note: when --no-time-scale, time_scale is set directly in make_env()
 
     # Train!
     print(f"\nStarting training for {args.total_timesteps:,} timesteps...")

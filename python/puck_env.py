@@ -184,12 +184,12 @@ class PuckEnv(gym.Env):
             # On Windows, use tagname parameter
             self._mm = mmap.mmap(-1, self.cfg.MEMORY_SIZE, tagname=self.cfg.MEMORY_NAME)
             self._connected = True
-            print(f"[PuckEnv] Connected to shared memory '{self.cfg.MEMORY_NAME}'")
+            print(f"[PuckEnv] Instance {self.instance_id}: Connected to shared memory '{self.cfg.MEMORY_NAME}'")
             print(f"[PuckEnv] Struct size: {self.cfg.SIZE} bytes")
             return True
         except Exception as e:
-            print(f"[PuckEnv] Failed to connect to shared memory: {e}")
-            print("[PuckEnv] Make sure the Unity game is running with the RL mod!")
+            print(f"[PuckEnv] Instance {self.instance_id}: Failed to connect to '{self.cfg.MEMORY_NAME}': {e}")
+            print(f"[PuckEnv] Make sure game instance {self.instance_id} is running with '/rl {self.instance_id}' + F9!")
             return False
 
     def _read_state(self) -> Tuple:
@@ -404,7 +404,7 @@ class PuckEnv(gym.Env):
 
         # Connect if not already
         if not self._connect():
-            raise RuntimeError("Could not connect to shared memory. Is the game running?")
+            raise RuntimeError(f"Could not connect to shared memory for instance {self.instance_id}. Is game running with '/rl {self.instance_id}' + F9?")
 
         # Signal reset to Unity
         self._signal_reset()
@@ -412,7 +412,7 @@ class PuckEnv(gym.Env):
         # Wait for first observation
         state = self._wait_for_obs()
         if state is None:
-            raise TimeoutError("Timeout waiting for Unity after reset")
+            raise TimeoutError(f"Timeout waiting for Unity after reset (instance {self.instance_id}, memory '{self.cfg.MEMORY_NAME}')")
 
         # Send neutral action to complete handshake
         neutral_action = np.zeros(8, dtype=np.float32)
@@ -448,7 +448,7 @@ class PuckEnv(gym.Env):
         # Wait for next observation
         state = self._wait_for_obs()
         if state is None:
-            raise TimeoutError("Timeout waiting for Unity during step")
+            raise TimeoutError(f"Timeout waiting for Unity during step (instance {self.instance_id}, memory '{self.cfg.MEMORY_NAME}')")
 
         # Extract data
         obs = self._extract_obs(state)
